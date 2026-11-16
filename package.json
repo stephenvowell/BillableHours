@@ -1,0 +1,1 @@
+{"description":"Freelance time logging and invoicing — log client, work title, and hours per task, then generate detailed invoices.","license":"UNLICENSED","name":"billablehours","private":true,"scripts":{"test":"node --test tests/test_billable.mjs"},"type":"module","version":"1.0.0"}

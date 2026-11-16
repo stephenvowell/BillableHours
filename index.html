@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BillableHours — freelance time log &amp; invoicing</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>BillableHours</h1>
+  <p class="sub">Log the work. Bill the hours. Your data stays yours.</p>
+</header>
+
+<nav id="tabs" aria-label="Sections">
+  <button data-tab="time" class="active">Time</button>
+  <button data-tab="clients">Clients</button>
+  <button data-tab="invoices">Invoices</button>
+  <button data-tab="reports">Reports</button>
+  <button data-tab="settings">Settings</button>
+</nav>
+
+<main>
+  <section id="tab-time" class="tab active">
+    <h2>Quick entry</h2>
+    <p class="hint">Type plain words, e.g. <code>2.5h login page for Acme</code> or <code>45m call with Beta Studio</code>.</p>
+    <div class="row">
+      <input id="quickText" type="text" placeholder="2.5h login page for Acme" autocomplete="off">
+      <button id="quickAdd" class="primary">Add</button>
+    </div>
+    <p id="quickMsg" class="msg" role="status"></p>
+
+    <h2>Log time</h2>
+    <form id="entryForm" class="form">
+      <label>Client
+        <select id="entryClient" required></select>
+      </label>
+      <label>Work title
+        <input id="entryTitle" type="text" required placeholder="What did you do?">
+      </label>
+      <label>Date <input id="entryDate" type="date" required></label>
+      <label>Hours <input id="entryHours" type="number" step="0.25" min="0.25" required placeholder="2.5"></label>
+      <label class="check"><input id="entryBillable" type="checkbox" checked> Billable</label>
+      <label>Notes <input id="entryNotes" type="text" placeholder="Optional"></label>
+      <button type="submit" class="primary">Log entry</button>
+    </form>
+
+    <h2>Entries</h2>
+    <div class="row">
+      <select id="entryFilter" aria-label="Filter by client"></select>
+      <button id="exportEntriesCsv">Export entries CSV</button>
+    </div>
+    <div id="entryList"></div>
+  </section>
+
+  <section id="tab-clients" class="tab">
+    <h2>Clients</h2>
+    <form id="clientForm" class="form">
+      <label>Name <input id="clientName" type="text" required placeholder="Acme Consulting"></label>
+      <label>Email <input id="clientEmail" type="email" placeholder="amy@acme.example"></label>
+      <label>Address <textarea id="clientAddress" rows="2" placeholder="Street, City, State ZIP"></textarea></label>
+      <label>Hourly rate <input id="clientRate" type="number" step="0.01" min="0" placeholder="65"></label>
+      <label>Currency
+        <select id="clientCurrency">
+          <option>USD</option><option>EUR</option><option>GBP</option>
+        </select>
+      </label>
+      <label>Payment terms (days) <input id="clientTerms" type="number" min="0" step="1" value="30"></label>
+      <button type="submit" class="primary">Add client</button>
+    </form>
+    <div id="clientList"></div>
+  </section>
+
+  <section id="tab-invoices" class="tab">
+    <h2>New invoice</h2>
+    <form id="invoiceForm" class="form">
+      <label>Client <select id="invoiceClient" required></select></label>
+      <label>From <input id="invoiceFrom" type="date" required></label>
+      <label>To <input id="invoiceTo" type="date" required></label>
+      <label>Tax % <input id="invoiceTax" type="number" step="0.1" min="0" value="0"></label>
+      <button type="submit" class="primary">Create invoice</button>
+    </form>
+    <p id="invoiceMsg" class="msg" role="status"></p>
+    <h2>Invoices</h2>
+    <div id="invoiceList"></div>
+    <div id="invoiceView"></div>
+  </section>
+
+  <section id="tab-reports" class="tab">
+    <h2>Reports</h2>
+    <div id="reportSummary"></div>
+    <h3>By client</h3>
+    <div id="reportByClient"></div>
+    <h3>By month</h3>
+    <div id="reportByMonth"></div>
+    <div class="row">
+      <button id="exportByClientCsv">By-client CSV</button>
+      <button id="exportByMonthCsv">By-month CSV</button>
+      <button id="exportInvoicesCsv">Invoices CSV</button>
+    </div>
+  </section>
+
+  <section id="tab-settings" class="tab">
+    <h2>Settings</h2>
+    <form id="settingsForm" class="form">
+      <label>Business name <input id="setBusinessName" type="text"></label>
+      <label>Business email <input id="setBusinessEmail" type="email"></label>
+      <label>Default hourly rate <input id="setDefaultRate" type="number" step="0.01" min="0"></label>
+      <label>AI agent (your choice — stored only)
+        <select id="setAgent"></select>
+      </label>
+      <p class="hint">BillableHours never calls any AI service and never asks for an API key. The agent choice is just stored for later.</p>
+      <button type="submit" class="primary">Save settings</button>
+    </form>
+    <h2>Data</h2>
+    <div class="row">
+      <button id="seedSample">Load sample data</button>
+      <button id="clearData" class="danger">Clear all data</button>
+    </div>
+    <p class="hint">Standalone page: data is kept in this browser (localStorage). The Muse app version keeps it server-side, so phone and PC share it.</p>
+    <p class="hint" id="versionLine"></p>
+  </section>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

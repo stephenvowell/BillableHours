@@ -7,6 +7,7 @@
 import {
   VERSION,
   AGENT_CHOICES,
+  DOCUMENT_KIND_LABELS,
   createStore,
   defaultData,
   lineAmountCents,
@@ -69,20 +70,31 @@ function renderClients() {
   clientOptions($("entryClient"));
   clientOptions($("invoiceClient"));
   clientOptions($("entryFilter"), true);
+  clientOptions($("docClient"));
+  clientOptions($("emailClient"));
   const list = $("clientList");
   if (store.data.clients.length === 0) {
     list.innerHTML = `<p class="hint">No clients yet — add your first one above, or load the sample data in Settings.</p>`;
     return;
   }
-  list.innerHTML = store.data.clients.map((c) => `
+  list.innerHTML = store.data.clients.map((c) => {
+    const contact = [
+      c.contactName ? esc(c.contactName) : "",
+      c.phone ? `<a href="tel:${esc(c.phone.replace(/[^+0-9]/g, ""))}">${esc(c.phone)}</a>` : "",
+      c.website ? `<a href="${esc(c.website)}" target="_blank" rel="noopener">${esc(c.website)}</a>` : "",
+    ].filter(Boolean).join(" · ");
+    return `
     <div class="card">
       <div class="title">${esc(c.name)}</div>
       <div class="meta">${esc(c.email)}${c.address ? " · " + esc(c.address).replace(/\n/g, ", ") : ""}</div>
+      ${contact ? `<div class="meta">${contact}</div>` : ""}
+      ${c.contactNotes ? `<div class="meta">${esc(c.contactNotes)}</div>` : ""}
       <div class="meta">${money(Math.round(c.rate * 100), c.currency)}/hr · Net ${c.termsDays} days</div>
       <div class="actions">
         <button class="small" data-del-client="${c.id}">Delete</button>
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
   list.querySelectorAll("[data-del-client]").forEach((b) => {
     b.addEventListener("click", () => {
       try {
@@ -100,6 +112,10 @@ $("clientForm").addEventListener("submit", (ev) => {
       name: $("clientName").value,
       email: $("clientEmail").value,
       address: $("clientAddress").value,
+      contactName: $("clientContactName").value,
+      phone: $("clientPhone").value,
+      website: $("clientWebsite").value,
+      contactNotes: $("clientContactNotes").value,
       rate: $("clientRate").value === "" ? null : Number($("clientRate").value),
       currency: $("clientCurrency").value,
       termsDays: Number($("clientTerms").value) || 30,
@@ -110,7 +126,81 @@ $("clientForm").addEventListener("submit", (ev) => {
   } catch (err) { alert(err.message); }
 });
 
+// -- client documents (SOW / requirements = the prompt) --------------
+function renderDocuments() {
+  const list = $("docList");
+  const docs = store.data.documents;
+  if (docs.length === 0) {
+    list.innerHTML = `<p class="hint">No documents yet.</p>`;
+    return;
+  }
+  list.innerHTML = docs.map((d) => {
+    const c = store.getClient(d.clientId);
+    return `<div class="card">
+      <div class="title">${esc(d.title)}</div>
+      <div class="meta">${DOCUMENT_KIND_LABELS[d.kind] || d.kind} · ${esc(c ? c.name : "?")}
+        ${d.fileName ? " · file: " + esc(d.fileName) : ""}</div>
+      ${d.promptText ? `<div class="meta">${esc(d.promptText.slice(0, 300))}${d.promptText.length > 300 ? "…" : ""}</div>` : ""}
+      <div class="actions"><button class="small" data-del-doc="${d.id}">Delete</button></div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll("[data-del-doc]").forEach((b) => {
+    b.addEventListener("click", () => {
+      try {
+        store.deleteDocument(b.dataset.delDoc);
+        renderAll();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] || "");
+    r.onerror = () => reject(new Error("Could not read the file."));
+    r.readAsDataURL(file);
+  });
+}
+
+$("docForm").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const msg = $("docMsg");
+  try {
+    const file = $("docFile").files[0] || null;
+    const fileBase64 = file ? await readFileAsBase64(file) : "";
+    store.addDocument({
+      clientId: $("docClient").value,
+      kind: $("docKind").value,
+      title: $("docTitle").value,
+      promptText: $("docText").value,
+      fileName: file ? file.name : "",
+      mimeType: file ? file.type : "",
+      fileBase64,
+    });
+    msg.classList.remove("error");
+    msg.textContent = "Document added.";
+    ev.target.reset();
+    renderAll();
+  } catch (err) {
+    msg.classList.add("error");
+    msg.textContent = err.message;
+  }
+});
+
 // -- time entries ---------------------------------------------------------
+function refreshEntryDocuments() {
+  const select = $("entryDocument");
+  const clientId = $("entryClient").value;
+  const cur = select.value;
+  const docs = clientId ? store.documentsFor(clientId) : [];
+  select.innerHTML = `<option value="">— No document —</option>` +
+    docs.map((d) => `<option value="${d.id}">${esc(d.title)} (${DOCUMENT_KIND_LABELS[d.kind] || d.kind})</option>`).join("");
+  if (cur && docs.some((d) => d.id === cur)) select.value = cur;
+}
+
+$("entryClient").addEventListener("change", refreshEntryDocuments);
+
 function renderEntries() {
   const filter = $("entryFilter").value || null;
   const entries = store.entriesFor({ clientId: filter });
@@ -122,11 +212,13 @@ function renderEntries() {
   list.innerHTML = entries.slice().reverse().map((e) => {
     const c = store.getClient(e.clientId);
     const amount = c ? lineAmountCents(e.hours, c.rate) : 0;
+    const docTitle = store.documentTitle(e.documentId);
     return `<div class="card">
       <div class="title">${esc(e.title)}</div>
       <div class="meta">${esc(c ? c.name : "?")} · ${e.date} · ${e.hours.toFixed(2)} h
         ${e.billable ? "· <span class='amount'>" + money(amount, c ? c.currency : "USD") + "</span>" : "· non-billable"}
         ${e.invoiced ? "· invoiced" : ""}</div>
+      ${docTitle ? `<div class="meta">Per: ${esc(docTitle)}</div>` : ""}
       ${e.notes ? `<div class="meta">${esc(e.notes)}</div>` : ""}
       <div class="actions"><button class="small" data-del-entry="${e.id}">Delete</button></div>
     </div>`;
@@ -153,6 +245,7 @@ $("entryForm").addEventListener("submit", (ev) => {
       hours: Number($("entryHours").value),
       billable: $("entryBillable").checked,
       notes: $("entryNotes").value,
+      documentId: $("entryDocument").value || null,
     });
     ev.target.reset();
     $("entryDate").value = todayISO();
@@ -233,11 +326,12 @@ function showInvoice(invoiceId) {
   const c = store.getClient(inv.clientId);
   const cur = c ? c.currency : "USD";
   const rows = inv.lines.map((l) => `<tr>
-      <td>${l.date}</td><td>${esc(l.title)}</td>
+      <td>${l.date}</td><td>${esc(l.title)}${l.documentTitle ? `<br><span class="hint">Per: ${esc(l.documentTitle)}</span>` : ""}</td>
       <td class="num">${l.hours.toFixed(2)}</td>
       <td class="num">${money(Math.round(l.rate * 100), cur)}</td>
       <td class="num">${money(l.amountCents, cur)}</td>
     </tr>`).join("");
+  const docTitles = store.invoiceDocumentTitles(inv.id);
   $("invoiceView").innerHTML = `
     <div class="card" id="print-area">
       <div class="title">INVOICE ${inv.number}</div>
@@ -245,6 +339,7 @@ function showInvoice(invoiceId) {
       <div class="meta">Bill to: ${esc(c ? c.name : "?")}${c && c.address ? " — " + esc(c.address).replace(/\n/g, ", ") : ""}</div>
       <div class="meta">Invoice date: ${inv.date} · Due: ${inv.dueDate} · ${inv.fromDate} to ${inv.toDate}</div>
       <div class="meta">Status: <span class="pill ${inv.status}">${inv.status}</span></div>
+      ${docTitles.length ? `<div class="meta">Work performed per: ${docTitles.map(esc).join("; ")}</div>` : ""}
       <div class="scroll"><table>
         <tr><th>Date</th><th>Work</th><th class="num">Hours</th><th class="num">Rate</th><th class="num">Amount</th></tr>
         ${rows}
@@ -277,6 +372,54 @@ $("invoiceForm").addEventListener("submit", (ev) => {
     msg.classList.add("error");
     msg.textContent = err.message;
   }
+});
+
+// -- email log ------------------------------------------------------------
+function renderEmails() {
+  const clientId = $("emailClient").value;
+  const list = $("emailList");
+  const mails = clientId ? store.emailsFor(clientId) : store.data.emails.slice().sort((a, b) => (a.emailDate < b.emailDate ? 1 : -1));
+  if (mails.length === 0) {
+    list.innerHTML = `<p class="hint">No emails logged yet.</p>`;
+    return;
+  }
+  list.innerHTML = mails.map((m) => {
+    const c = store.getClient(m.clientId);
+    return `<div class="card">
+      <div class="title">${esc(m.subject || "(no subject)")} <span class="pill">${m.direction}</span> <span class="pill">${esc(m.status)}</span></div>
+      <div class="meta">${esc(c ? c.name : "?")} · ${m.emailDate} · ${esc(m.fromEmail)} → ${esc(m.toEmail)}</div>
+      ${m.body ? `<div class="meta">${esc(m.body.slice(0, 300))}${m.body.length > 300 ? "…" : ""}</div>` : ""}
+      <div class="actions"><button class="small" data-del-email="${m.id}">Delete</button></div>
+    </div>`;
+  }).join("");
+  list.querySelectorAll("[data-del-email]").forEach((b) => {
+    b.addEventListener("click", () => {
+      try {
+        store.deleteEmail(b.dataset.delEmail);
+        renderAll();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+$("emailClient").addEventListener("change", renderEmails);
+
+$("emailForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  try {
+    store.logEmail({
+      clientId: $("emailClient").value,
+      direction: $("emailDirection").value,
+      emailDate: $("emailDate").value,
+      subject: $("emailSubject").value,
+      body: $("emailBody").value,
+      fromEmail: $("emailFrom").value,
+      toEmail: $("emailTo").value,
+    });
+    ev.target.reset();
+    $("emailDate").value = todayISO();
+    renderAll();
+  } catch (err) { alert(err.message); }
 });
 
 // -- reports ------------------------------------------------------------------
@@ -346,11 +489,11 @@ $("seedSample").addEventListener("click", () => {
   }
   seedSampleData(store);
   renderAll();
-  alert("Sample data loaded: 3 clients, 16 entries, invoice INV-0001.");
+  alert("Sample data loaded: 3 clients, 16 entries, invoice INV-0001, 1 SOW document, 1 logged email.");
 });
 
 $("clearData").addEventListener("click", () => {
-  if (confirm("Delete ALL clients, entries, and invoices? This cannot be undone.")) {
+  if (confirm("Delete ALL clients, documents, entries, emails, and invoices? This cannot be undone.")) {
     localStorage.removeItem(LS_KEY);
     location.reload();
   }
@@ -359,11 +502,15 @@ $("clearData").addEventListener("click", () => {
 // -- init -----------------------------------------------------------------------
 function renderAll() {
   renderClients();
+  renderDocuments();
   renderEntries();
+  refreshEntryDocuments();
   renderInvoices();
   renderReports();
+  renderEmails();
   renderSettings();
 }
 
 $("entryDate").value = todayISO();
+$("emailDate").value = todayISO();
 renderAll();

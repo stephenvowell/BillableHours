@@ -7,11 +7,25 @@
  *
  * Storage is the caller's job: the Muse app keeps state server-side,
  * the standalone page in this repo uses localStorage.
+ *
+ * v2 adds what the live app gained after v1: client contact information
+ * (contact person, phone, website, contact notes); client documents —
+ * a statement of work or requirements document is the prompt for the
+ * work, and time entries can be tied to one; and a per-client email log
+ * (manual entries, plus Gmail-checked mail deduped by Gmail message id).
+ * The live Gmail check/send itself runs on the hosted app's server and
+ * is NOT in this repo — here the email log is data only.
  */
 
-export const VERSION = "1.0.0";
+export const VERSION = "2.0.0";
 export const AGENT_CHOICES = ["Muse", "ChatGPT", "Claude", "Gemini"];
 export const DEFAULT_AGENT = "Muse";
+export const DOCUMENT_KINDS = ["sow", "requirements", "other"];
+export const DOCUMENT_KIND_LABELS = {
+  sow: "SOW",
+  requirements: "Requirements",
+  other: "Other",
+};
 
 /** Round a 2-decimal number to integer cents, half-up. */
 export function toCents(value) {
@@ -41,9 +55,11 @@ function validDate(value) {
 
 export function defaultData() {
   return {
-    version: 1,
+    version: 2,
     clients: [],
+    documents: [],
     entries: [],
+    emails: [],
     invoices: [],
     settings: {
       defaultRate: 65,
@@ -56,6 +72,9 @@ export function defaultData() {
 
 export function createStore(initialData) {
   const data = initialData || defaultData();
+  // Tolerate v1 data (no documents / emails arrays yet).
+  if (!Array.isArray(data.documents)) data.documents = [];
+  if (!Array.isArray(data.emails)) data.emails = [];
 
   function save() {
     if (typeof store.onSave === "function") store.onSave(data);
@@ -74,7 +93,10 @@ export function createStore(initialData) {
     },
 
     // -- clients ---------------------------------------------------
-    addClient({ name, email = "", address = "", rate = null, currency = "USD", termsDays = 30 }) {
+    addClient({
+      name, email = "", address = "", rate = null, currency = "USD", termsDays = 30,
+      contactName = "", phone = "", website = "", contactNotes = "",
+    }) {
       name = String(name || "").trim();
       if (!name) throw new Error("Client name is required.");
       if (rate === null || rate === undefined || rate === "") {
@@ -85,6 +107,10 @@ export function createStore(initialData) {
         name,
         email: String(email).trim(),
         address: String(address).trim(),
+        contactName: String(contactName).trim(),
+        phone: String(phone).trim(),
+        website: String(website).trim(),
+        contactNotes: String(contactNotes).trim(),
         rate: Number(rate),
         currency: String(currency || "USD").trim().toUpperCase(),
         termsDays: parseInt(termsDays, 10) || 30,
@@ -97,7 +123,7 @@ export function createStore(initialData) {
     updateClient(clientId, fields) {
       const client = store.getClient(clientId);
       if (!client) throw new Error("Unknown client.");
-      for (const key of ["name", "email", "address", "currency"]) {
+      for (const key of ["name", "email", "address", "currency", "contactName", "phone", "website", "contactNotes"]) {
         if (key in fields) client[key] = String(fields[key]).trim();
       }
       if ("rate" in fields) client.rate = Number(fields.rate);
@@ -109,6 +135,15 @@ export function createStore(initialData) {
     deleteClient(clientId) {
       if (data.entries.some((e) => e.clientId === clientId)) {
         throw new Error("Client has time entries; delete those first.");
+      }
+      if (data.documents.some((d) => d.clientId === clientId)) {
+        throw new Error("Client has documents; delete those first.");
+      }
+      if (data.emails.some((m) => m.clientId === clientId)) {
+        throw new Error("Client has logged emails; delete those first.");
+      }
+      if (data.invoices.some((i) => i.clientId === clientId)) {
+        throw new Error("Client has invoices; void those first.");
       }
       data.clients = data.clients.filter((c) => c.id !== clientId);
       save();
@@ -135,13 +170,90 @@ export function createStore(initialData) {
       return best;
     },
 
+    // -- client documents (SOW / requirements = the prompt) -------
+    addDocument({ clientId, kind, title, promptText = "", fileName = "", mimeType = "", fileBase64 = "" }) {
+      if (!store.getClient(clientId)) throw new Error("Unknown client.");
+      if (!DOCUMENT_KINDS.includes(kind)) {
+        throw new Error("Document kind must be sow, requirements, or other.");
+      }
+      title = String(title || "").trim();
+      if (!title) throw new Error("Document title is required.");
+      const doc = {
+        id: newId(),
+        clientId,
+        kind,
+        title,
+        promptText: String(promptText || ""),
+        fileName: String(fileName || "").trim(),
+        mimeType: String(mimeType || "").trim(),
+        hasFile: Boolean(fileBase64),
+        // The file itself is base64 in the hosted app; the standalone
+        // page keeps only the name (files stay in the browser's memory).
+        fileBase64: String(fileBase64 || ""),
+      };
+      data.documents.push(doc);
+      save();
+      return doc;
+    },
+
+    getDocument(documentId) {
+      return data.documents.find((d) => d.id === documentId) || null;
+    },
+
+    documentsFor(clientId) {
+      return data.documents.filter((d) => d.clientId === clientId);
+    },
+
+    updateDocument(documentId, fields) {
+      const doc = store.getDocument(documentId);
+      if (!doc) throw new Error("Unknown document.");
+      if ("kind" in fields) {
+        if (!DOCUMENT_KINDS.includes(fields.kind)) {
+          throw new Error("Document kind must be sow, requirements, or other.");
+        }
+        doc.kind = fields.kind;
+      }
+      if ("title" in fields) {
+        const title = String(fields.title || "").trim();
+        if (!title) throw new Error("Document title is required.");
+        doc.title = title;
+      }
+      if ("promptText" in fields) doc.promptText = String(fields.promptText || "");
+      // The attached file itself is never replaced — delete and re-add.
+      save();
+      return doc;
+    },
+
+    deleteDocument(documentId) {
+      const doc = store.getDocument(documentId);
+      if (!doc) throw new Error("Unknown document.");
+      if (data.entries.some((e) => e.documentId === documentId)) {
+        throw new Error("Document is linked to time entries; unlink those first.");
+      }
+      data.documents = data.documents.filter((d) => d.id !== documentId);
+      save();
+    },
+
+    documentTitle(documentId) {
+      if (!documentId) return null;
+      const doc = store.getDocument(documentId);
+      return doc ? doc.title : null;
+    },
+
     // -- time entries ----------------------------------------------
-    addEntry({ clientId, title, date, hours, billable = true, notes = "" }) {
+    addEntry({ clientId, title, date, hours, billable = true, notes = "", documentId = null }) {
       if (!store.getClient(clientId)) throw new Error("Unknown client.");
       title = String(title || "").trim();
       if (!title) throw new Error("Work title is required.");
       hours = Math.round(Number(hours) * 100) / 100;
       if (!(hours > 0)) throw new Error("Hours must be more than 0.");
+      if (documentId) {
+        const doc = store.getDocument(documentId);
+        if (!doc) throw new Error("Unknown document.");
+        if (doc.clientId !== clientId) {
+          throw new Error("Document belongs to a different client.");
+        }
+      }
       const entry = {
         id: newId(),
         clientId,
@@ -150,6 +262,7 @@ export function createStore(initialData) {
         hours,
         billable: Boolean(billable),
         notes: String(notes || "").trim(),
+        documentId: documentId || null,
         invoiced: false,
         invoiceId: null,
       };
@@ -170,17 +283,99 @@ export function createStore(initialData) {
       return data.entries.find((e) => e.id === entryId) || null;
     },
 
-    entriesFor({ clientId = null, fromDate = null, toDate = null, billableOnly = false, uninvoicedOnly = false } = {}) {
+    entriesFor({ clientId = null, fromDate = null, toDate = null, billableOnly = false, uninvoicedOnly = false, documentId = null } = {}) {
       const out = data.entries.filter((e) => {
         if (clientId && e.clientId !== clientId) return false;
         if (fromDate && e.date < validDate(fromDate)) return false;
         if (toDate && e.date > validDate(toDate)) return false;
         if (billableOnly && !e.billable) return false;
         if (uninvoicedOnly && e.invoiced) return false;
+        if (documentId && e.documentId !== documentId) return false;
         return true;
       });
       out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.title.localeCompare(b.title)));
       return out;
+    },
+
+    // -- email log ---------------------------------------------------
+    // Manual log entries and Gmail-checked mail share this log. The
+    // hosted app checks Gmail server-side and dedupes by gmailMessageId;
+    // this repo only stores the log — it never reads or sends mail.
+    logEmail({
+      clientId, direction, emailDate, subject = "", body = "",
+      fromEmail = "", toEmail = "", gmailMessageId = null, status = "logged",
+    }) {
+      if (!store.getClient(clientId)) throw new Error("Unknown client.");
+      if (direction !== "inbound" && direction !== "outbound") {
+        throw new Error("Direction must be inbound or outbound.");
+      }
+      const mail = {
+        id: newId(),
+        clientId,
+        direction,
+        emailDate: validDate(emailDate),
+        subject: String(subject || "").trim(),
+        body: String(body || ""),
+        fromEmail: String(fromEmail || "").trim(),
+        toEmail: String(toEmail || "").trim(),
+        gmailMessageId: gmailMessageId ? String(gmailMessageId) : null,
+        status,
+      };
+      data.emails.push(mail);
+      save();
+      return mail;
+    },
+
+    /** Store Gmail-checked mail, skipping any message id already logged. */
+    saveCheckedEmails(clientId, items) {
+      if (!store.getClient(clientId)) throw new Error("Unknown client.");
+      let added = 0;
+      let skipped = 0;
+      for (const item of items || []) {
+        if (!item || !item.gmailMessageId) throw new Error("Checked email needs a Gmail message id.");
+        if (data.emails.some((m) => m.gmailMessageId === item.gmailMessageId)) {
+          skipped += 1;
+          continue;
+        }
+        store.logEmail({ clientId, ...item, status: "logged" });
+        added += 1;
+      }
+      return { added, skipped };
+    },
+
+    getEmail(emailId) {
+      return data.emails.find((m) => m.id === emailId) || null;
+    },
+
+    emailsFor(clientId) {
+      const out = data.emails.filter((m) => m.clientId === clientId);
+      out.sort((a, b) => (a.emailDate < b.emailDate ? 1 : a.emailDate > b.emailDate ? -1 : 0));
+      return out;
+    },
+
+    deleteEmail(emailId) {
+      const mail = store.getEmail(emailId);
+      if (!mail) throw new Error("Unknown email.");
+      data.emails = data.emails.filter((m) => m.id !== emailId);
+      save();
+    },
+
+    /** Outcome of a send started elsewhere (hosted app): sent or failed. */
+    confirmEmailSent(emailId, gmailMessageId) {
+      const mail = store.getEmail(emailId);
+      if (!mail) throw new Error("Unknown email.");
+      mail.status = "sent";
+      if (gmailMessageId) mail.gmailMessageId = String(gmailMessageId);
+      save();
+      return mail;
+    },
+
+    confirmEmailSendFailed(emailId) {
+      const mail = store.getEmail(emailId);
+      if (!mail) throw new Error("Unknown email.");
+      mail.status = "send-failed";
+      save();
+      return mail;
     },
 
     // -- invoices --------------------------------------------------
@@ -217,6 +412,8 @@ export function createStore(initialData) {
           hours: entry.hours,
           rate: client.rate,
           amountCents,
+          documentId: entry.documentId || null,
+          documentTitle: store.documentTitle(entry.documentId),
         });
       }
       const taxCents = Math.round((subtotalCents * Number(taxPct)) / 100);
@@ -250,6 +447,17 @@ export function createStore(initialData) {
 
     getInvoice(invoiceId) {
       return data.invoices.find((i) => i.id === invoiceId) || null;
+    },
+
+    /** Distinct document titles an invoice's lines were performed per. */
+    invoiceDocumentTitles(invoiceId) {
+      const inv = store.getInvoice(invoiceId);
+      if (!inv) throw new Error("Unknown invoice.");
+      const seen = [];
+      for (const line of inv.lines) {
+        if (line.documentTitle && !seen.includes(line.documentTitle)) seen.push(line.documentTitle);
+      }
+      return seen;
     },
 
     setInvoiceStatus(invoiceId, status) {
@@ -348,7 +556,7 @@ export function createStore(initialData) {
     // -- CSV export ------------------------------------------------
     reportRows(kind) {
       if (kind === "entries") {
-        const rows = [["Date", "Client", "Work title", "Hours", "Rate", "Amount", "Billable", "Invoiced", "Notes"]];
+        const rows = [["Date", "Client", "Work title", "Hours", "Rate", "Amount", "Billable", "Invoiced", "Document", "Notes"]];
         for (const entry of store.entriesFor()) {
           const client = store.getClient(entry.clientId);
           const name = client ? client.name : "?";
@@ -359,6 +567,7 @@ export function createStore(initialData) {
             entry.billable ? (lineAmountCents(entry.hours, rate) / 100).toFixed(2) : "0.00",
             entry.billable ? "yes" : "no",
             entry.invoiced ? "yes" : "no",
+            store.documentTitle(entry.documentId) || "",
             entry.notes,
           ]);
         }
@@ -462,7 +671,7 @@ function escapeRegExp(s) {
 // -- sample data (SAMPLE DATA ONLY — no real client data) ----------------
 
 export const SAMPLE_CLIENTS = [
-  { name: "Acme Consulting", email: "amy@acme.example", address: "100 Main St\nTucson, AZ 85701", rate: 65, currency: "USD", termsDays: 30 },
+  { name: "Acme Consulting", email: "amy@acme.example", address: "100 Main St\nTucson, AZ 85701", rate: 65, currency: "USD", termsDays: 30, contactName: "Amy Chen", phone: "520-555-0101", website: "https://acme.example", contactNotes: "Prefers email; approves invoices on Fridays." },
   { name: "Beta Studio", email: "hello@beta.example", address: "250 Art Ave\nPhoenix, AZ 85004", rate: 75, currency: "USD", termsDays: 15 },
   { name: "Gamma Labs", email: "team@gamma.example", address: "77 Science Park\nSierra Vista, AZ 85635", rate: 50, currency: "USD", termsDays: 30 },
 ];
@@ -493,12 +702,33 @@ export const SAMPLE_ENTRIES = [
  * Gamma 3.0h / $150.00; grand 31.5h / $2,087.50 (billable only).
  * INV-0001 (Acme, Nov 2–6): 13.5h, subtotal $877.50, tax $0.00,
  * total $877.50. Uninvoiced after it: 18.0h / $1,210.00.
+ * The seed also adds one sample SOW document for Acme (linked to the
+ * "Login page build" entry, so INV-0001 line 1 carries it) and one
+ * sample logged email from Acme.
  */
 export function seedSampleData(store) {
   const clients = SAMPLE_CLIENTS.map((c) => store.addClient(c));
+  const doc = store.addDocument({
+    clientId: clients[0].id,
+    kind: "sow",
+    title: "Acme website redesign — SOW",
+    promptText: "Rebuild the Acme marketing site: login page with auth, dashboard, and settings. React, mobile-first, done by Nov 13.",
+  });
   for (const [ci, title, date, hours, billable, notes] of SAMPLE_ENTRIES) {
-    store.addEntry({ clientId: clients[ci].id, title, date, hours, billable, notes });
+    store.addEntry({
+      clientId: clients[ci].id, title, date, hours, billable, notes,
+      documentId: title === "Login page build" ? doc.id : null,
+    });
   }
+  store.logEmail({
+    clientId: clients[0].id,
+    direction: "inbound",
+    emailDate: "2026-11-03",
+    subject: "Re: login page scope",
+    body: "Login page is in scope for this phase — go ahead.",
+    fromEmail: "amy@acme.example",
+    toEmail: "stephen@example.com",
+  });
   return store.createInvoice({
     clientId: clients[0].id,
     fromDate: "2026-11-02",
